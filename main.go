@@ -28,6 +28,7 @@ type TicketService struct {
 	events      sync.Map
 	mu          sync.Mutex
 	uuidCounter int
+	cache       [10]*Event
 }
 
 type EventDeserializer struct {
@@ -66,16 +67,26 @@ func (ts *TicketService) ListEvents() []*Event {
 }
 
 func (ts *TicketService) BookTickets(eventID string, numTickets int) ([]string, error) {
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
+	eventIDInt, _ := strconv.Atoi(eventID)
+	cacheIndex := eventIDInt % 10
+	var event *Event
 
-	event, ok := ts.events.Load(eventID)
-	if !ok {
-		return nil, fmt.Errorf("event not found")
+	if ts.cache[cacheIndex] != nil && ts.cache[cacheIndex].ID == eventID {
+		event = ts.cache[cacheIndex]
+	} else {
+		ts.mu.Lock()
+		eventInterface, ok := ts.events.Load(eventID)
+		event = eventInterface.(*Event)
+		ts.mu.Unlock()
+		if !ok {
+			return nil, fmt.Errorf("event not found")
+		}
+		ts.mu.Lock()
+		ts.cache[cacheIndex] = event
+		ts.mu.Unlock()
 	}
 
-	ev := event.(*Event)
-	if ev.AvailableTickets < numTickets {
+	if event.AvailableTickets < numTickets {
 		return nil, fmt.Errorf("not enough tickets available")
 	}
 	var ticketIDs []string
@@ -85,8 +96,10 @@ func (ts *TicketService) BookTickets(eventID string, numTickets int) ([]string, 
 		ticketIDs = append(ticketIDs, ticketID)
 	}
 
-	ev.AvailableTickets -= numTickets
-	ts.events.Store(eventID, ev)
+	ts.mu.Lock()
+	event.AvailableTickets -= numTickets
+	ts.events.Store(eventID, event)
+	ts.mu.Unlock()
 
 	return ticketIDs, nil
 }
